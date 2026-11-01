@@ -56,6 +56,11 @@ jobs:
           docker push "$IMAGE"
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
 
+      - name: Install kubelogin
+        uses: azure/use-kubelogin@v1
+        with:
+          kubelogin-version: 'v0.2.12'
+
       - name: Configure AKS credentials
         run: |
           set -euo pipefail
@@ -63,6 +68,7 @@ jobs:
             --resource-group "$RESOURCE_GROUP" \
             --name "$AKS_NAME" \
             --overwrite-existing
+          kubelogin convert-kubeconfig -l azurecli
 
       - name: Create or update Service Bus Secret
         env:

@@ -76,7 +76,7 @@ One-time setup:
    - `SERVICE_BUS_QUEUE_NAME` — queue to consume
    - `LOG_LEVEL` — optional; defaults to `INFO`
 4. In the `dev` environment's **Environment secrets** section, add `SERVICE_BUS_CONNECTION_STRING`. Use a Service Bus connection string with Listen permission. Do not put credentials in the workflow, Kubernetes manifest, or source code.
-5. Push the workflow and app to the repository's `main` branch, then follow the run under **Actions**. The workflow creates/updates the Kubernetes Secret and waits for the deployment rollout.
+5. Push the workflow and app to the repository's `main` branch, then follow the run under **Actions**. The workflow installs `kubelogin` and configures the AKS kubeconfig to use the Azure CLI session, then creates/updates the Kubernetes Secret and waits for the deployment rollout.
 
 The Azure client secret and Service Bus connection string are stored as GitHub Actions Secrets. The Service Bus connection string is passed to a Kubernetes Secret at deploy time; neither credential is included in the container image or committed files. Client secrets expire: set a calendar reminder to rotate `AZURE_CREDENTIALS` before its one-year expiry. Restrict access to repository and cluster secrets, and enable AKS secret encryption at rest or use Azure Key Vault for production.
 
