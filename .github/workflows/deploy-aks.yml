@@ -8,7 +8,6 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
   build-and-deploy:
@@ -25,9 +24,7 @@ jobs:
 
       - name: Validate deployment configuration
         env:
-          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
-          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
-          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          AZURE_CREDENTIALS: ${{ secrets.AZURE_CREDENTIALS }}
           SERVICE_BUS_CONNECTION_STRING: ${{ secrets.SERVICE_BUS_CONNECTION_STRING }}
           SERVICE_BUS_QUEUE_NAME: ${{ vars.SERVICE_BUS_QUEUE_NAME }}
         run: |
@@ -35,21 +32,17 @@ jobs:
           if [ -z "$ACR_NAME" ] ||
              [ -z "$RESOURCE_GROUP" ] ||
              [ -z "$AKS_NAME" ] ||
-             [ -z "$AZURE_CLIENT_ID" ] ||
-             [ -z "$AZURE_TENANT_ID" ] ||
-             [ -z "$AZURE_SUBSCRIPTION_ID" ] ||
+             [ -z "$AZURE_CREDENTIALS" ] ||
              [ -z "$SERVICE_BUS_CONNECTION_STRING" ] ||
              [ -z "$SERVICE_BUS_QUEUE_NAME" ]; then
             echo "::error::A required GitHub variable or secret is missing."
             exit 1
           fi
 
-      - name: Sign in to Azure with OIDC
+      - name: Sign in to Azure with service principal
         uses: azure/login@v2
         with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
 
       - name: Build and push image to ACR
         id: image

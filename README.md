@@ -22,23 +22,54 @@ The GitHub Actions workflow at `.github/workflows/deploy-aks.yml` builds and pus
 
 One-time setup:
 
-1. Create a GitHub Actions OIDC federated credential for an Azure app registration. Set the issuer to `https://token.actions.githubusercontent.com`, audience to `api://AzureADTokenExchange`, and subject to `repo:OWNER/REPOSITORY:ref:refs/heads/main` (replace the owner and repository). This lets the workflow sign in without a stored Azure client secret.
-2. Grant that Azure identity `AcrPush` on the ACR, `Azure Kubernetes Service Cluster User Role` on the AKS resource, and Kubernetes permissions to create/update the `sb-event` namespace's Secret and Deployment. Create the namespace once with an administrator account:
+1. Sign in with an Azure account allowed to create service principals and role assignments. Create a service principal with a one-year client secret and no broad default role assignment:
+
+   ```sh
+   az login
+   az account set --subscription YOUR_SUBSCRIPTION_ID
+   az ad sp create-for-rbac \
+     --name sb-event-github-deploy \
+     --skip-assignment \
+     --years 1 \
+     --json-auth
+   ```
+
+   The command prints a JSON credential object containing a client secret. Treat the entire output as sensitive: do not paste it in chat, commit it, or save it in the repository. Add the **entire JSON object** as a GitHub Actions repository secret named `AZURE_CREDENTIALS`. This workflow passes it directly to `azure/login`.
+
+2. Grant the service principal least-necessary access. Find the `clientId` in the JSON output, then run:
+
+   ```sh
+   CLIENT_ID=the-clientId-from-the-output
+   SP_OBJECT_ID=$(az ad sp show --id "$CLIENT_ID" --query id --output tsv)
+   ACR_ID=$(az acr show --name YOUR_ACR_NAME --query id --output tsv)
+   AKS_ID=$(az aks show --resource-group YOUR_RESOURCE_GROUP --name YOUR_AKS_CLUSTER --query id --output tsv)
+
+   az role assignment create \
+     --assignee-object-id "$SP_OBJECT_ID" \
+     --assignee-principal-type ServicePrincipal \
+     --role AcrPush \
+     --scope "$ACR_ID"
+
+   az role assignment create \
+     --assignee-object-id "$SP_OBJECT_ID" \
+     --assignee-principal-type ServicePrincipal \
+     --role "Azure Kubernetes Service Cluster User Role" \
+     --scope "$AKS_ID"
+   ```
+
+   Also grant the identity permission to update the `sb-event` namespace's Secret and Deployment using your cluster's configured Kubernetes authorization. If AKS uses Azure RBAC for Kubernetes authorization, the namespace-scoped `Azure Kubernetes Service RBAC Writer` role works but permits broad write access in that namespace, including Secrets. Create the namespace once with an administrator account:
 
    ```sh
    kubectl create namespace sb-event
    ```
 
-   The AKS cluster identity must also be allowed to pull from ACR; attach the registry once if needed:
+   The AKS cluster identity (not the GitHub service principal) must also be allowed to pull from ACR; attach the registry once if needed:
 
    ```sh
    az aks update --resource-group YOUR_RESOURCE_GROUP --name YOUR_AKS_CLUSTER --attach-acr YOUR_ACR_NAME
    ```
 
 3. In the GitHub repository, open **Settings → Secrets and variables → Actions**. Add these **repository variables**:
-   - `AZURE_CLIENT_ID` — application (client) ID of the federated Azure identity
-   - `AZURE_TENANT_ID` — Microsoft Entra tenant ID
-   - `AZURE_SUBSCRIPTION_ID` — subscription ID
    - `ACR_NAME` — registry name without `.azurecr.io`
    - `AZURE_RESOURCE_GROUP` — AKS resource group
    - `AKS_CLUSTER_NAME` — AKS cluster name
@@ -47,7 +78,7 @@ One-time setup:
 4. Add `SERVICE_BUS_CONNECTION_STRING` as a **repository secret**. Use a Service Bus connection string with Listen permission. Do not put credentials in the workflow, Kubernetes manifest, or source code.
 5. Push the workflow and app to the repository's `main` branch, then follow the run under **Actions**. The workflow creates/updates the Kubernetes Secret and waits for the deployment rollout.
 
-The Service Bus connection string is passed from GitHub Actions Secrets to a Kubernetes Secret at deploy time; it is not included in the container image or committed files. Restrict access to repository and cluster secrets, and enable AKS secret encryption at rest or use Azure Key Vault for production.
+The Azure client secret and Service Bus connection string are stored as GitHub Actions Secrets. The Service Bus connection string is passed to a Kubernetes Secret at deploy time; neither credential is included in the container image or committed files. Client secrets expire: set a calendar reminder to rotate `AZURE_CREDENTIALS` before its one-year expiry. Restrict access to repository and cluster secrets, and enable AKS secret encryption at rest or use Azure Key Vault for production.
 
 ## Manual deployment to Azure Kubernetes Service (AKS)
 
