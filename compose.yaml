@@ -1,0 +1,6 @@
+services:
+  service-bus-consumer:
+    build: .
+    env_file:
+      - .env
+    restart: unless-stopped

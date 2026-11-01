@@ -1,0 +1,99 @@
+name: Build and deploy to AKS
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    env:
+      ACR_NAME: ${{ vars.ACR_NAME }}
+      RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+      AKS_NAME: ${{ vars.AKS_CLUSTER_NAME }}
+      NAMESPACE: sb-event
+      IMAGE_REPOSITORY: sb-event
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Validate deployment configuration
+        env:
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          SERVICE_BUS_CONNECTION_STRING: ${{ secrets.SERVICE_BUS_CONNECTION_STRING }}
+          SERVICE_BUS_QUEUE_NAME: ${{ vars.SERVICE_BUS_QUEUE_NAME }}
+        run: |
+          set -euo pipefail
+          if [ -z "$ACR_NAME" ] ||
+             [ -z "$RESOURCE_GROUP" ] ||
+             [ -z "$AKS_NAME" ] ||
+             [ -z "$AZURE_CLIENT_ID" ] ||
+             [ -z "$AZURE_TENANT_ID" ] ||
+             [ -z "$AZURE_SUBSCRIPTION_ID" ] ||
+             [ -z "$SERVICE_BUS_CONNECTION_STRING" ] ||
+             [ -z "$SERVICE_BUS_QUEUE_NAME" ]; then
+            echo "::error::A required GitHub variable or secret is missing."
+            exit 1
+          fi
+
+      - name: Sign in to Azure with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build and push image to ACR
+        id: image
+        run: |
+          set -euo pipefail
+          LOGIN_SERVER="$(az acr show --name "$ACR_NAME" --query loginServer --output tsv)"
+          IMAGE="$LOGIN_SERVER/$IMAGE_REPOSITORY:$GITHUB_SHA"
+          az acr login --name "$ACR_NAME"
+          docker build --platform linux/amd64 --tag "$IMAGE" .
+          docker push "$IMAGE"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+
+      - name: Configure AKS credentials
+        run: |
+          set -euo pipefail
+          az aks get-credentials \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$AKS_NAME" \
+            --overwrite-existing
+
+      - name: Create or update Service Bus Secret
+        env:
+          SERVICE_BUS_CONNECTION_STRING: ${{ secrets.SERVICE_BUS_CONNECTION_STRING }}
+          SERVICE_BUS_QUEUE_NAME: ${{ vars.SERVICE_BUS_QUEUE_NAME }}
+          LOG_LEVEL: ${{ vars.LOG_LEVEL || 'INFO' }}
+        run: |
+          set -euo pipefail
+          kubectl create secret generic service-bus-consumer \
+            --namespace "$NAMESPACE" \
+            --from-literal="SERVICE_BUS_CONNECTION_STRING=$SERVICE_BUS_CONNECTION_STRING" \
+            --from-literal="SERVICE_BUS_QUEUE_NAME=$SERVICE_BUS_QUEUE_NAME" \
+            --from-literal="LOG_LEVEL=$LOG_LEVEL" \
+            --dry-run=client --output=yaml \
+            | kubectl apply --filename=-
+
+      - name: Deploy and wait for rollout
+        env:
+          IMAGE: ${{ steps.image.outputs.image }}
+        run: |
+          set -euo pipefail
+          sed "s#REPLACE_WITH_ACR_NAME.azurecr.io/sb-event:1.0.0#$IMAGE#g" \
+            k8s/deployment.yaml \
+            | kubectl apply --namespace "$NAMESPACE" --filename=-
+          kubectl rollout status \
+            --namespace "$NAMESPACE" \
+            deployment/service-bus-consumer \
+            --timeout=180s

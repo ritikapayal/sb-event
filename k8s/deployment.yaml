@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: service-bus-consumer
+  labels:
+    app: service-bus-consumer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: service-bus-consumer
+  template:
+    metadata:
+      labels:
+        app: service-bus-consumer
+    spec:
+      containers:
+        - name: consumer
+          image: REPLACE_WITH_ACR_NAME.azurecr.io/sb-event:1.0.0
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - secretRef:
+                name: service-bus-consumer
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 10001
+            capabilities:
+              drop:
+                - ALL
